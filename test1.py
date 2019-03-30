@@ -112,9 +112,8 @@ def main():
         running_reward = 0.05 * ep_reward + (1 - 0.05) * running_reward
         finish_episode()
         if i_episode % args.log_interval == 0:
-            print("\rEp: {} Average reward: {:.2f}".format(
-                i_episode, running_reward), end="")
-
+            print('Episode {}\tLast reward: {:.2f}\tAverage reward: {:.2f}'.format(
+                  i_episode, ep_reward, running_reward))
         # if running_reward > env.spec.reward_threshold:
         #     print("Solved! Running reward is now {} and "
         #           "the last episode runs to {} time steps!".format(running_reward, t))
@@ -129,7 +128,7 @@ def main():
     ax1.plot(rolling_mean)
     ax1.fill_between(range(len(policy.reward_history)), rolling_mean - std, rolling_mean + std, color='orange',
                      alpha=0.2)
-    ax1.set_title('Episode Length Moving Average ({}-episode window)--V1--'.format(window))
+    ax1.set_title('Episode Length Moving Average ({}-episode window)'.format(window))
     ax1.set_xlabel('Episode')
     ax1.set_ylabel('Episode Length')
 
