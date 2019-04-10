@@ -41,7 +41,7 @@ class Policy(nn.Module):
         self.state_space = env.observation_space.shape[0]
         self.action_space = env.action_space.n
         self.affine1 = nn.Linear(self.state_space, 128)
-        self.dropout = nn.Dropout(p=0.6)
+        # self.dropout = nn.Dropout(p=0.6)
         self.affine2 = nn.Linear(128, self.action_space)
 
         self.saved_log_probs = []
@@ -52,7 +52,7 @@ class Policy(nn.Module):
 
     def forward(self, x):
         x = self.affine1(x)
-        x = self.dropout(x)
+        # x = self.dropout(x)
         x = F.relu(x)
         action_scores = self.affine2(x)
         return F.softmax(action_scores, dim=1)
