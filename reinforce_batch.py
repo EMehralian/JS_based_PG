@@ -14,7 +14,6 @@ print(sys.version)
 print(torch.__version__)
 print(torch.version.cuda)
 
-
 # Hyperparameters
 NUM_EPISODES = 2000
 # LEARNING_RATE = 0.000025
@@ -49,6 +48,7 @@ class policy_estimator(nn.Module):
         action_scores = self.affine2(x)
         return F.softmax(action_scores, dim=1)
 
+
 # class policy_estimator():
 #     def __init__(self, env):
 #         self.n_inputs = env.observation_space.shape[0]
@@ -67,7 +67,7 @@ class policy_estimator(nn.Module):
 
 
 def discount_rewards(rewards, gamma=0.99):
-    r = np.array([gamma**i * rewards[i]
+    r = np.array([gamma ** i * rewards[i]
                   for i in range(len(rewards))])
     # Reverse the array direction for cumsum and then
     # revert back to the original order
@@ -83,8 +83,8 @@ def select_action(policy_estimator, state):
     return action.item()
 
 
-def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,num_runs=Num_RUNS,
-              batch_size=10, gamma=0.99):
+def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES, num_runs=Num_RUNS,
+              batch_size=2, gamma=0.99):
     run_rewards = []
     for run in range(num_runs):
         print(run)
@@ -136,10 +136,12 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,num_runs=Num_RUNS
                         action_tensor = torch.LongTensor(batch_actions)
 
                         # Calculate loss
-                        logprob = torch.log(
-                            policy_estimator(state_tensor))
+                        logprob = torch.log(policy_estimator(state_tensor))
+
+                        # baseline_tensor = (logprob[np.arange(len(action_tensor)), action_tensor]^2 * reward_tensor) / (logprob[np.arange(len(action_tensor)), action_tensor]^2)
                         selected_logprobs = reward_tensor * \
                                             logprob[np.arange(len(action_tensor)), action_tensor]
+
                         loss = -selected_logprobs.mean()
 
                         # Calculate gradients
@@ -153,8 +155,9 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,num_runs=Num_RUNS
                         batch_counter = 1
 
                     # Print running average
-                    print("\rRun: {} Ep: {} Average of last 10: {:.2f}".format(run+1,
-                        ep + 1, np.mean(total_rewards[-10:])), end="")
+                    print("\rRun: {} Ep: {} Average of last 10: {:.2f}".format(run + 1,
+                                                                               ep + 1, np.mean(total_rewards[-10:])),
+                          end="")
         run_rewards.append(total_rewards)
 
     return run_rewards
@@ -188,4 +191,3 @@ def draw_results(results):
 pe = policy_estimator()
 rewards = reinforce(env, pe)
 draw_results(rewards)
-
