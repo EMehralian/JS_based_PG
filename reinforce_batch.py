@@ -15,10 +15,11 @@ print(torch.__version__)
 print(torch.version.cuda)
 
 # Hyperparameters
-NUM_EPISODES = 2000
-# LEARNING_RATE = 0.000025
+NUM_EPISODES = 1000
 LEARNING_RATE = 0.01
 Num_RUNS = 10
+BATCH_SIZE = 10
+
 env = gym.make('CartPole-v1')
 env.seed(543)
 torch.manual_seed(543)
@@ -46,7 +47,8 @@ class policy_estimator(nn.Module):
         # x = self.dropout(x)
         x = F.relu(x)
         action_scores = self.affine2(x)
-        return F.softmax(action_scores, dim=1)
+        return F.log_softmax(action_scores, dim=1)
+        # return F.softmax(action_scores, dim=1)
 
 
 # class policy_estimator():
@@ -72,19 +74,31 @@ def discount_rewards(rewards, gamma=0.99):
     # Reverse the array direction for cumsum and then
     # revert back to the original order
     r = r[::-1].cumsum()[::-1]
-    return r - r.mean()
+    return r #- r.mean()
 
 
 def select_action(policy_estimator, state):
     state = torch.from_numpy(state).float().unsqueeze(0)
-    probs = policy_estimator(state)
+    probs = torch.exp(policy_estimator(state))
     m = Categorical(probs)
     action = m.sample()
     return action.item()
 
 
+def smoothed_gradient(gradients, gamma):
+    # r = np.array([gamma ** i * gradients[i]
+    #               for i in range(len(gradients))])
+    # d = np.array([gamma ** i
+    #               for i in range(len(gradients))])
+    # return np.sum(r)/ np.sum(d)
+    return gradients
+
+
+def s_factor():
+    return 1
+
 def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES, num_runs=Num_RUNS,
-              batch_size=2, gamma=0.99):
+              batch_size=BATCH_SIZE, gamma=0.99):
     run_rewards = []
     for run in range(num_runs):
         print(run)
@@ -93,10 +107,11 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES, num_runs=Num_RUN
         batch_rewards = []
         batch_actions = []
         batch_states = []
+        batch_gradients = []
         batch_counter = 1
 
         # Define optimizer
-        optimizer = optim.Adam(pe.parameters(),
+        optimizer = optim.SGD(pe.parameters(),
                                lr=LEARNING_RATE)
 
         # action_space = np.arange(env.action_space.n)
@@ -136,16 +151,21 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES, num_runs=Num_RUN
                         action_tensor = torch.LongTensor(batch_actions)
 
                         # Calculate loss
-                        logprob = torch.log(policy_estimator(state_tensor))
-
+                        # logprob = torch.log(policy_estimator(state_tensor))
+                        logprob = policy_estimator(state_tensor)
                         # baseline_tensor = (logprob[np.arange(len(action_tensor)), action_tensor]^2 * reward_tensor) / (logprob[np.arange(len(action_tensor)), action_tensor]^2)
                         selected_logprobs = reward_tensor * \
                                             logprob[np.arange(len(action_tensor)), action_tensor]
+                        batch_gradients.extend(selected_logprobs)
 
                         loss = -selected_logprobs.mean()
 
                         # Calculate gradients
                         loss.backward()
+                        for p in pe.parameters():
+                            gw = smoothed_gradient(p,.2)
+                            p.grad = gw + s_factor() * (p.grad - gw)
+
                         # Apply gradients
                         optimizer.step()
 
@@ -179,10 +199,21 @@ def draw_results(results):
     ax1.set_xlabel('Episode')
     ax1.set_ylabel('Episode Length')
 
-    ax2.plot(results[0])
-    ax2.set_title('Episode Length')
+
+    window2 = 50
+    rolling_mean2 = pd.Series(results[-1]).rolling(window2).mean()
+    std2 = pd.Series(results[-1]).rolling(window2).std()
+    ax2.plot(rolling_mean2)
+    ax2.fill_between(range(len(results[-1])), rolling_mean2 - std2, rolling_mean2 + std2, color='orange',
+                     alpha=0.2)
+    ax2.set_title('Episode Length Moving Average ({}-episode window)--V2 with out mean sub--'.format(window2))
     ax2.set_xlabel('Episode')
     ax2.set_ylabel('Episode Length')
+
+    # ax2.plot(results[0])
+    # ax2.set_title('Episode Length')
+    # ax2.set_xlabel('Episode')
+    # ax2.set_ylabel('Episode Length')
 
     fig.tight_layout(pad=2)
     plt.show()
