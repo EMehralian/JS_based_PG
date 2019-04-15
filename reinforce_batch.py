@@ -15,10 +15,10 @@ print(torch.__version__)
 print(torch.version.cuda)
 
 # Hyperparameters
-NUM_EPISODES = 1000
-LEARNING_RATE = 0.01
+NUM_EPISODES = 2000
+LEARNING_RATE = 0.001
 Num_RUNS = 10
-BATCH_SIZE = 10
+BATCH_SIZE = 4
 
 env = gym.make('CartPole-v1')
 env.seed(543)
@@ -74,7 +74,7 @@ def discount_rewards(rewards, gamma=0.99):
     # Reverse the array direction for cumsum and then
     # revert back to the original order
     r = r[::-1].cumsum()[::-1]
-    return r #- r.mean()
+    return r  # - r.mean()
 
 
 def select_action(policy_estimator, state):
@@ -85,102 +85,128 @@ def select_action(policy_estimator, state):
     return action.item()
 
 
+def flatten_params(model):
+    return torch.cat([param.grad.data.view(-1) for param in model.parameters()], 0)
+
+
+def load_params(model, flattened):
+    offset = 0
+    for param in model.parameters():
+        param.grad.data.copy_(flattened[offset:offset + param.nelement()].view(param.size()))
+        offset += param.nelement()
+
+
 def smoothed_gradient(gradients, gamma):
     # r = np.array([gamma ** i * gradients[i]
     #               for i in range(len(gradients))])
     # d = np.array([gamma ** i
     #               for i in range(len(gradients))])
     # return np.sum(r)/ np.sum(d)
-    return gradients
+    if gradients:
+        return torch.mean(torch.stack(gradients))
+    else:
+        return 0
 
 
-def s_factor():
-    return 1
+temp_arr = []
 
-def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES, num_runs=Num_RUNS,
+
+def s_factor(observations, current_estimation, shrinkage_point):
+    if len(observations) > 1:
+        Cov = np.cov([t.numpy() for t in observations], rowvar=False)
+        temp = torch.matmul(torch.matmul((current_estimation - shrinkage_point).view(-1), torch.from_numpy(Cov).float()), (current_estimation - shrinkage_point))
+        temp_arr.append(temp)
+        # alpha = 1 - (list(current_estimation.size())[0] - 2) / temp
+        alpha = 1 - (10 / temp)
+        return alpha
+        # return torch.max(torch.zeros_like(alpha), alpha)
+    else:
+        return 0
+
+
+def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
               batch_size=BATCH_SIZE, gamma=0.99):
-    run_rewards = []
-    for run in range(num_runs):
-        print(run)
-        # Set up lists to hold results
-        total_rewards = []
-        batch_rewards = []
-        batch_actions = []
-        batch_states = []
-        batch_gradients = []
-        batch_counter = 1
+    total_rewards = []
+    batch_rewards = []
+    batch_actions = []
+    batch_states = []
+    batch_gradients = []
 
-        # Define optimizer
-        optimizer = optim.SGD(pe.parameters(),
-                               lr=LEARNING_RATE)
+    batch_counter = 1
+    # Define optimizer
+    optimizer = optim.Adam(pe.parameters(),
+                           lr=LEARNING_RATE)
 
-        # action_space = np.arange(env.action_space.n)
-        for ep in range(num_episodes):
-            s_0 = env.reset()
-            states = []
-            rewards = []
-            actions = []
-            complete = False
-            while complete == False:
-                # Get actions and convert to numpy array
-                # action_probs = policy_estimator.predict(s_0).detach().numpy()
-                # action = np.random.choice(action_space, p=action_probs)
+    # action_space = np.arange(env.action_space.n)
+    for ep in range(num_episodes):
+        s_0 = env.reset()
+        states = []
+        rewards = []
+        actions = []
+        complete = False
+        while complete == False:
+            # Get actions and convert to numpy array
+            # action_probs = policy_estimator.predict(s_0).detach().numpy()
+            # action = np.random.choice(action_space, p=action_probs)
 
-                action = select_action(policy_estimator, s_0)
-                s_1, r, complete, _ = env.step(action)
+            action = select_action(policy_estimator, s_0)
+            s_1, r, complete, _ = env.step(action)
 
-                states.append(s_0)
-                rewards.append(r)
-                actions.append(action)
-                s_0 = s_1
+            states.append(s_0)
+            rewards.append(r)
+            actions.append(action)
+            s_0 = s_1
 
-                # If complete, batch data
-                if complete:
-                    batch_rewards.extend(discount_rewards(rewards, gamma))
-                    batch_states.extend(states)
-                    batch_actions.extend(actions)
-                    batch_counter += 1
-                    total_rewards.append(sum(rewards))
+            # If complete, batch data
+            if complete:
+                batch_rewards.extend(discount_rewards(rewards, gamma))
+                batch_states.extend(states)
+                batch_actions.extend(actions)
+                batch_counter += 1
+                total_rewards.append(sum(rewards))
 
-                    # If batch is complete, update network
-                    if batch_counter == batch_size:
-                        optimizer.zero_grad()
-                        state_tensor = torch.FloatTensor(batch_states)
-                        reward_tensor = torch.FloatTensor(batch_rewards)
-                        # Actions are used as indices, must be LongTensor
-                        action_tensor = torch.LongTensor(batch_actions)
+                # If batch is complete, update network
+                if batch_counter == batch_size:
+                    optimizer.zero_grad()
+                    state_tensor = torch.FloatTensor(batch_states)
+                    reward_tensor = torch.FloatTensor(batch_rewards)
+                    # Actions are used as indices, must be LongTensor
+                    action_tensor = torch.LongTensor(batch_actions)
 
-                        # Calculate loss
-                        # logprob = torch.log(policy_estimator(state_tensor))
-                        logprob = policy_estimator(state_tensor)
-                        # baseline_tensor = (logprob[np.arange(len(action_tensor)), action_tensor]^2 * reward_tensor) / (logprob[np.arange(len(action_tensor)), action_tensor]^2)
-                        selected_logprobs = reward_tensor * \
-                                            logprob[np.arange(len(action_tensor)), action_tensor]
-                        batch_gradients.extend(selected_logprobs)
+                    # Calculate loss
+                    # logprob = torch.log(policy_estimator(state_tensor))
+                    logprob = policy_estimator(state_tensor)
 
-                        loss = -selected_logprobs.mean()
+                    # baseline_tensor = (logprob[np.arange(len(action_tensor)), action_tensor]^2 * reward_tensor)
+                    # / (logprob[np.arange(len(action_tensor)), action_tensor]^2)
 
-                        # Calculate gradients
-                        loss.backward()
-                        for p in pe.parameters():
-                            gw = smoothed_gradient(p,.2)
-                            p.grad = gw + s_factor() * (p.grad - gw)
+                    selected_logprobs = reward_tensor * \
+                                        logprob[np.arange(len(action_tensor)), action_tensor]
 
-                        # Apply gradients
-                        optimizer.step()
+                    loss = -selected_logprobs.mean()
 
-                        batch_rewards = []
-                        batch_actions = []
-                        batch_states = []
-                        batch_counter = 1
+                    # Calculate gradients
 
-                    # Print running average
-                    print("\rRun: {} Ep: {} Average of last 10: {:.2f}".format(run + 1,
-                                                                               ep + 1, np.mean(total_rewards[-10:])),
-                          end="")
-        run_rewards.append(total_rewards)
+                    gw = smoothed_gradient(batch_gradients, .2)
+                    loss.backward()
+                    batch_gradients.append(flatten_params(policy_estimator))
+                    g_JS = gw + s_factor(batch_gradients, batch_gradients[-1], gw) * (flatten_params(policy_estimator) - gw)
+                    load_params(policy_estimator, g_JS)
 
-    return run_rewards
+                    # Apply gradients
+                    optimizer.step()
+
+                    batch_rewards = []
+                    batch_actions = []
+                    batch_states = []
+                    batch_counter = 1
+
+                # Print running average
+                print("\rRun: {} Ep: {} Average of last 10: {:.2f}".format(run + 1,
+                                                                           ep + 1, np.mean(total_rewards[-10:])),
+                      end="")
+
+    return total_rewards
 
 
 def draw_results(results):
@@ -192,33 +218,35 @@ def draw_results(results):
     std = np.std(results, axis=0)
     # rolling_mean = pd.Series(results).rolling(window).mean()
     # std = pd.Series(results).rolling(window).std()
-    ax1.plot(rolling_mean)
-    ax1.fill_between(range(len(results[0])), rolling_mean - std, rolling_mean + std, color='orange',
-                     alpha=0.2)
-    ax1.set_title('Episode Length Moving Average ({}-episode window)--V2--'.format(window))
+    ax1.plot(std)
+    # ax1.fill_between(range(len(results[0])), rolling_mean - std, rolling_mean + std, color='orange',
+    #                  alpha=0.2)
+    ax1.set_title('Episode Length Moving Average ({}-episode window)'.format(window))
     ax1.set_xlabel('Episode')
     ax1.set_ylabel('Episode Length')
 
-
-    window2 = 50
-    rolling_mean2 = pd.Series(results[-1]).rolling(window2).mean()
-    std2 = pd.Series(results[-1]).rolling(window2).std()
+    window2 = int(50)
+    rolling_mean2 = pd.Series(results[0]).rolling(window2).mean()
+    std2 = pd.Series(results[0]).rolling(window2).std()
     ax2.plot(rolling_mean2)
-    ax2.fill_between(range(len(results[-1])), rolling_mean2 - std2, rolling_mean2 + std2, color='orange',
+    ax2.fill_between(range(len(results[0])), rolling_mean2 - std2, rolling_mean2 + std2, color='orange',
                      alpha=0.2)
-    ax2.set_title('Episode Length Moving Average ({}-episode window)--V2 with out mean sub--'.format(window2))
+    ax2.set_title('Episode Length Moving Average ({}-episode window)'.format(window2))
     ax2.set_xlabel('Episode')
     ax2.set_ylabel('Episode Length')
 
-    # ax2.plot(results[0])
-    # ax2.set_title('Episode Length')
-    # ax2.set_xlabel('Episode')
-    # ax2.set_ylabel('Episode Length')
-
     fig.tight_layout(pad=2)
+    message = f"NUM_EPISODES: {NUM_EPISODES}, LEARNING_RATE: {LEARNING_RATE}, Num_RUNS: {Num_RUNS}, BATCH_SIZE: {BATCH_SIZE}"
+    fig.text(.0, .0, message)
     plt.show()
 
 
-pe = policy_estimator()
-rewards = reinforce(env, pe)
-draw_results(rewards)
+run_rewards = []
+for run in range(Num_RUNS):
+    pe = policy_estimator()
+    run_rewards.append(reinforce(env, pe))
+print(len(run_rewards))
+draw_results(run_rewards)
+
+print(np.mean(temp_arr))
+print(np.std(temp_arr))
