@@ -114,7 +114,10 @@ temp_arr = []
 def s_factor(observations, current_estimation, shrinkage_point):
     if len(observations) > 1:
         Cov = np.cov([t.numpy() for t in observations], rowvar=False)
-        temp = torch.matmul(torch.matmul((current_estimation - shrinkage_point).view(-1), torch.from_numpy(Cov).float()), (current_estimation - shrinkage_point))
+        Cov_inv = np.linalg.inv(Cov + 0.00001 * np.random.rand(Cov.shape[0], Cov.shape[1]))
+        temp = torch.matmul(
+            torch.matmul((current_estimation - shrinkage_point).view(-1), torch.from_numpy(Cov_inv).float()),
+            (current_estimation - shrinkage_point))
         temp_arr.append(temp)
         # alpha = 1 - (list(current_estimation.size())[0] - 2) / temp
         alpha = 1 - (10 / temp)
@@ -190,7 +193,8 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
                     gw = smoothed_gradient(batch_gradients, .2)
                     loss.backward()
                     batch_gradients.append(flatten_params(policy_estimator))
-                    g_JS = gw + s_factor(batch_gradients, batch_gradients[-1], gw) * (flatten_params(policy_estimator) - gw)
+                    g_JS = gw + s_factor(batch_gradients, batch_gradients[-1], gw) * (
+                                flatten_params(policy_estimator) - gw)
                     load_params(policy_estimator, g_JS)
 
                     # Apply gradients
