@@ -15,10 +15,10 @@ print(torch.__version__)
 print(torch.version.cuda)
 
 # Hyperparameters
-NUM_EPISODES = 2000
-LEARNING_RATE = 0.001
+NUM_EPISODES = 1000
+LEARNING_RATE = 0.01
 Num_RUNS = 10
-BATCH_SIZE = 4
+BATCH_SIZE = 10
 
 env = gym.make('CartPole-v1')
 env.seed(543)
@@ -48,24 +48,6 @@ class policy_estimator(nn.Module):
         x = F.relu(x)
         action_scores = self.affine2(x)
         return F.log_softmax(action_scores, dim=1)
-        # return F.softmax(action_scores, dim=1)
-
-
-# class policy_estimator():
-#     def __init__(self, env):
-#         self.n_inputs = env.observation_space.shape[0]
-#         self.n_outputs = env.action_space.n
-#
-#         # Define network
-#         self.network = nn.Sequential(
-#             nn.Linear(self.n_inputs, 16),
-#             nn.ReLU(),
-#             nn.Linear(16, self.n_outputs),
-#             nn.Softmax(dim=-1))
-#
-#     def predict(self, state):
-#         action_probs = self.network(torch.FloatTensor(state))
-#         return action_probs
 
 
 def discount_rewards(rewards, gamma=0.99):
@@ -114,6 +96,7 @@ temp_arr = []
 def s_factor(observations, current_estimation, shrinkage_point):
     if len(observations) > 1:
         Cov = np.cov([t.numpy() for t in observations], rowvar=False)
+        # print(Cov)
         Cov_inv = np.linalg.inv(Cov + 0.00001 * np.random.rand(Cov.shape[0], Cov.shape[1]))
         temp = torch.matmul(
             torch.matmul((current_estimation - shrinkage_point).view(-1), torch.from_numpy(Cov_inv).float()),
@@ -127,6 +110,11 @@ def s_factor(observations, current_estimation, shrinkage_point):
         return 0
 
 
+def gradeint_debug(gradient):
+    grand_truth = torch.load('grandT.pt')
+    return torch.dist(gradient, grand_truth, 2)
+
+
 def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
               batch_size=BATCH_SIZE, gamma=0.99):
     total_rewards = []
@@ -134,8 +122,9 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
     batch_actions = []
     batch_states = []
     batch_gradients = []
+    JS_batch_gradients = []
 
-    batch_counter = 1
+    batch_counter = 0
     # Define optimizer
     optimizer = optim.Adam(pe.parameters(),
                            lr=LEARNING_RATE)
@@ -177,7 +166,6 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
                     action_tensor = torch.LongTensor(batch_actions)
 
                     # Calculate loss
-                    # logprob = torch.log(policy_estimator(state_tensor))
                     logprob = policy_estimator(state_tensor)
 
                     # baseline_tensor = (logprob[np.arange(len(action_tensor)), action_tensor]^2 * reward_tensor)
@@ -190,25 +178,33 @@ def reinforce(env, policy_estimator, num_episodes=NUM_EPISODES,
 
                     # Calculate gradients
 
-                    gw = smoothed_gradient(batch_gradients, .2)
+                    # gw = smoothed_gradient(batch_gradients, .2)
                     loss.backward()
-                    batch_gradients.append(flatten_params(policy_estimator))
-                    g_JS = gw + s_factor(batch_gradients, batch_gradients[-1], gw) * (
-                                flatten_params(policy_estimator) - gw)
-                    load_params(policy_estimator, g_JS)
-
+                    # batch_gradients.append(flatten_params(policy_estimator))
+                    # g_JS = gw + s_factor(batch_gradients, batch_gradients[-1], gw) * (
+                    #             flatten_params(policy_estimator) - gw)
+                    # JS_batch_gradients.append(g_JS)
+                    # load_params(policy_estimator, g_JS)
+                    # gradeint_debug(batch_gradients[-1], g_JS)
                     # Apply gradients
                     optimizer.step()
 
                     batch_rewards = []
                     batch_actions = []
                     batch_states = []
-                    batch_counter = 1
+                    batch_counter = 0
 
                 # Print running average
                 print("\rRun: {} Ep: {} Average of last 10: {:.2f}".format(run + 1,
                                                                            ep + 1, np.mean(total_rewards[-10:])),
                       end="")
+    #
+    # arr1 = [gradeint_debug(grad) for grad in JS_batch_gradients]
+    # arr2 = [gradeint_debug(grad) for grad in batch_gradients]
+    #
+    # plt.plot(arr1,'r')
+    # plt.plot(arr2,'b')
+    # plt.show()
 
     return total_rewards
 
@@ -249,7 +245,10 @@ run_rewards = []
 for run in range(Num_RUNS):
     pe = policy_estimator()
     run_rewards.append(reinforce(env, pe))
-print(len(run_rewards))
+    if run == 0:
+        torch.save(flatten_params(pe), "grandT.pt")
+
+
 draw_results(run_rewards)
 
 print(np.mean(temp_arr))
