@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 
 # Hyperparameters
-NUM_EPISODES = 2000
+NUM_EPISODES = 1000
 # LEARNING_RATE = 0.000025
 LEARNING_RATE = 0.01
 
@@ -41,7 +41,7 @@ class Policy(nn.Module):
         self.state_space = env.observation_space.shape[0]
         self.action_space = env.action_space.n
         self.affine1 = nn.Linear(self.state_space, 128)
-        # self.dropout = nn.Dropout(p=0.6)
+        self.dropout = nn.Dropout(p=0.6)
         self.affine2 = nn.Linear(128, self.action_space)
 
         self.saved_log_probs = []
@@ -52,10 +52,10 @@ class Policy(nn.Module):
 
     def forward(self, x):
         x = self.affine1(x)
-        # x = self.dropout(x)
+        x = self.dropout(x)
         x = F.relu(x)
         action_scores = self.affine2(x)
-        return F.softmax(action_scores, dim=1)
+        return F.log_softmax(action_scores, dim=1)
 
 
 policy = Policy()
@@ -65,10 +65,11 @@ eps = np.finfo(np.float32).eps.item()
 
 def select_action(state):
     state = torch.from_numpy(state).float().unsqueeze(0)
-    probs = policy(state)
+    log_probs = policy(state)
+    probs = torch.exp(log_probs)
     m = Categorical(probs)
     action = m.sample()
-    policy.saved_log_probs.append(m.log_prob(action))
+    policy.saved_log_probs.append(log_probs[:, action])
     return action.item()
 
 
@@ -80,7 +81,7 @@ def finish_episode():
         R = r + args.gamma * R
         returns.insert(0, R)
     returns = torch.tensor(returns)
-    returns = (returns - returns.mean()) / (returns.std() + eps)
+    # returns = (returns - returns.mean()) / (returns.std() + eps)
     for log_prob, R in zip(policy.saved_log_probs, returns):
         policy_loss.append(-log_prob * R)
     # policy_loss = policy_loss - policy_loss.mean()
