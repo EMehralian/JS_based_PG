@@ -28,6 +28,7 @@ env = gym.make('CartPole-v1')
 env.seed(args.seed)
 torch.manual_seed(args.seed)
 mc_grads_log = []
+js_grads_log = []
 
 
 class Policy(nn.Module):
@@ -39,6 +40,7 @@ class Policy(nn.Module):
 
         self.saved_log_probs = []
         self.rewards = []
+        self.gradient_history = []
 
     def forward(self, x):
         x = self.affine1(x)
@@ -53,9 +55,36 @@ def flatten_params(model):
 
 
 def l2_gradeint_debug(gradient):
-    grand_truth = torch.load('grandT.pt')
+    grand_truth = torch.load('MC_grads_T.pt')
     b = torch.zeros_like(gradient)
-    return torch.dist(gradient, b, 2).item()
+    return torch.dist(gradient, grand_truth, 2).item()
+
+
+def smoothed_gradient(gradients, gamma):
+    # r = np.array([gamma ** i * gradients[i]
+    #               for i in range(len(gradients))])
+    # d = np.array([gamma ** i
+    #               for i in range(len(gradients))])
+    # return np.sum(r)/ np.sum(d)
+    if gradients:
+        return torch.mean(torch.stack(gradients))
+    else:
+        return 0
+
+
+def s_factor(observations, shrinkage_point):
+    current_estimation = observations[-1]
+    if len(observations) > 1:
+        Cov = np.cov([t.cpu().numpy() for t in observations], rowvar=False)
+        Cov = np.multiply(Cov, np.identity(Cov.shape[0]))
+        Cov_inv = np.linalg.inv(Cov + 0.00001 * np.random.rand(Cov.shape[0], Cov.shape[1]))
+        temp = torch.matmul(
+            torch.matmul((current_estimation - shrinkage_point).view(-1), torch.from_numpy(Cov_inv).float()),
+            (current_estimation - shrinkage_point))
+        alpha = 1 - (100 / temp)
+        return alpha
+    else:
+        return 0
 
 
 def discount_rewards(rewards, gamma=0.99):
@@ -84,18 +113,33 @@ def finish_episode(policy, optimizer, eps, eval):
     optimizer.zero_grad()
     policy_loss = torch.cat(policy_loss).sum()
     policy_loss.backward()
+
     if eval:
-        if mc_grads_log:
-            mc_grads_log.append(mc_grads_log[-1].add(flatten_params(policy)))
-        else:
-            mc_grads_log.append(flatten_params(policy))
+        policy.gradient_history.append(flatten_params(policy))
+        if eval == "JS":
+            gw = smoothed_gradient(policy.gradient_history[:-1], .2)
+
+            g_JS = gw + s_factor(policy.gradient_history, gw) * (policy.gradient_history[-1] - gw)
+            js_grads_log.append(g_JS)
+
+            if mc_grads_log:
+                mc_grads_log.append(mc_grads_log[-1].add(flatten_params(policy)))
+            else:
+                mc_grads_log.append(flatten_params(policy))
+
+        elif eval == "MC":
+            if mc_grads_log:
+                mc_grads_log.append(mc_grads_log[-1].add(flatten_params(policy)))
+            else:
+                mc_grads_log.append(flatten_params(policy))
     else:
         optimizer.step()
+
     del policy.rewards[:]
     del policy.saved_log_probs[:]
 
 
-def reinforce(policy, num_episode, eps, eval=False):
+def reinforce(policy, num_episode, eps, eval):
     optimizer = optim.Adam(policy.parameters(), lr=1e-2)
     running_reward = 10
     ep_return = []
@@ -150,13 +194,14 @@ def main():
     for i in range(NUM_RUN):
         policy = Policy()
         run_return.append(reinforce(policy, 250, eps, eval=False))
-        reinforce(policy, 20000, eps, eval=True)
+        reinforce(policy, 20000, eps, eval="MC")
+
     normalized_grads = []
     for i in range(len(mc_grads_log)):
         normalized_grads.append(mc_grads_log[i].to(dtype=torch.float) / float(i + 1))
 
-    torch.save(mc_grads_log[-1], "MC_grand_T.pt")
     estimated_grad = [l2_gradeint_debug(x) for x in normalized_grads]
+    # torch.save(normalized_grads[-1], "MC_grads_T.pt")
     print(estimated_grad)
     plot(estimated_grad)
 
